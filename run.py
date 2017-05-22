@@ -390,7 +390,7 @@ if __name__ == "__main__":
 	#argv.append('--stack'); argv.append('-3.25')
 	
 	#argv.append('--dropout'); argv.append('0.46')
-	argv.append('--dropout'); argv.append('0.9')
+	argv.append('--dropout'); argv.append('0.25')
 
 	#argv.append('--aggregation'); argv.append('attsum')
 	#argv.append('--aggregation'); argv.append('attmean')
