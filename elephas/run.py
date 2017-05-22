@@ -12,9 +12,9 @@ def data():
     import numpy as np
     
     import pickle as pk
-    import nea.asap_reader as dataset
-    from nea.w2vEmbReader import W2VEmbReader as EmbReader
-    from nea.config import get_args
+    import deepats.asap_reader as dataset
+    from deepats.w2vEmbReader import W2VEmbReader as EmbReader
+    from deepats.config import get_args
     
     import logging
     logger = logging.getLogger(__name__)
@@ -67,12 +67,12 @@ def model(train_x, train_y, dev_x, dev_y, test_x, test_y, dev_y_org, test_y_org,
     
     import pickle as pk
     import numpy as np
-    from nea.optimizers import get_optimizer
-    from nea.asap_evaluator import Evaluator
-    import nea.asap_reader as dataset
-    from nea.config import get_args
-    from nea.my_layers import MeanOverTime
-    from nea.rwa import RWA
+    from deepats.optimizers import get_optimizer
+    from deepats.asap_evaluator import Evaluator
+    import deepats.asap_reader as dataset
+    from deepats.config import get_args
+    from deepats.my_layers import MeanOverTime
+    from deepats.rwa import RWA
     
     import string
     import random
@@ -138,10 +138,9 @@ def model(train_x, train_y, dev_x, dev_y, test_x, test_y, dev_y_org, test_y_org,
     model.add(Activation('tanh'))
     model.emb_index = 0
     
-    emb_path = 'embed/glove.6B.{}d.txt'.format(emb_dim)
-    abs_emb_path = args.abs_root + emb_path
+    abs_emb_path = '/home/david/data/embed/glove.6B.{}d.txt'.format(emb_dim)
     
-    from nea.w2vEmbReader import W2VEmbReader as EmbReader
+    from deepats.w2vEmbReader import W2VEmbReader as EmbReader
     emb_reader = EmbReader(abs_emb_path, emb_dim=emb_dim)
     emb_reader.load_embeddings(vocab)
     emb_wts = emb_reader.get_emb_matrix_given_vocab(vocab, model.layers[model.emb_index].get_weights()[0])
