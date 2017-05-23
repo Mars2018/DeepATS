@@ -47,8 +47,9 @@ def parse_args(argv=None):
     else:
         args = parser.parse_args(argv)
         
-    setattr(args, 'abs_emb_path', args.abs_root + args.emb_path)
-    setattr(args, 'abs_out_path', args.abs_root + args.out_dir_path)
+    setattr(args, 'abs_emb_path', args.emb_path)
+    
+    setattr(args, 'abs_out_path', args.out_dir_path)
         
     return args
 
@@ -62,13 +63,11 @@ def get_args():
     
     ####################################################################################################
     
-    deepatsroot = '/home/david/code/python/deepats/'
-    outroot = deepatsroot + 'output/'
     
-    asaproot = '/home/david/data/ats/asap/'
-    dataroot = asaproot + data + '/fold_' +fold+ '/'
+    absroot = '/home/david/code/python/nea/'
+    absdata = absroot + 'data/' +data+ '/fold_' +fold+ '/'
     
-    args = '-tr '+dataroot+'train.tsv -tu '+dataroot+'dev.tsv -ts '+dataroot+'test.tsv -o output'
+    args = '-tr '+absdata+'train.tsv -tu '+absdata+'dev.tsv -ts '+absdata+'test.tsv -o /home/david/code/python/nea/output'
     argv = args.split()
     
     argv.append('--data-set'); argv.append(data)
@@ -84,20 +83,20 @@ def get_args():
     #argv.append('--loss'); argv.append('soft_kappa')
     #argv.append('--loss'); argv.append('mse')
     
-    #argv.append('--emb'); argv.append('/home/david/data/embed/glove.6B.50d.txt')
-    #argv.append('--emb'); argv.append('/home/david/data/embed/glove.6B.100d.txt'); argv.append('--embdim'); argv.append('100');
-    #argv.append('--emb'); argv.append('/home/david/data/embed/glove.6B.200d.txt'); argv.append('--embdim'); argv.append('200');
-    argv.append('--emb'); argv.append('/home/david/data/embed/glove.6B.300d.txt'); argv.append('--embdim'); argv.append('300');
+    argv.append('--emb'); argv.append('/home/david/data/embed/glove.6B.50d.txt')
+    #argv.append('--emb'); argv.append('embed/glove.6B.100d.txt'); argv.append('--embdim'); argv.append('100');
+    #argv.append('--emb'); argv.append('embed/glove.6B.200d.txt'); argv.append('--embdim'); argv.append('200');
+    #argv.append('--emb'); argv.append('embed/glove.6B.300d.txt'); argv.append('--embdim'); argv.append('300');
     
-    #argv.append('--emb'); argv.append('/home/david/data/embed/lexvec.commoncrawl.300d.W.pos.neg3.txt'); argv.append('--embdim'); argv.append('300');
+    #argv.append('--emb'); argv.append('embed/lexvec.commoncrawl.300d.W.pos.neg3.txt'); argv.append('--embdim'); argv.append('300');
     
-    #argv.append('--emb'); argv.append('/home/david/data/embed/fasttext.sg.100d.txt'); argv.append('--embdim'); argv.append('100');##BEST
-    #argv.append('--emb'); argv.append('/home/david/data/embed/fasttext.sg.200d.m1.txt'); argv.append('--embdim'); argv.append('200');
-    #argv.append('--emb'); argv.append('/home/david/data/embed/fasttext.sg.200d.m2.txt'); argv.append('--embdim'); argv.append('200');
-    #argv.append('--emb'); argv.append('/home/david/data/embed/fasttext.cb.200d.m2.txt'); argv.append('--embdim'); argv.append('200');
-    #argv.append('--emb'); argv.append('/home/david/data/embed/fasttext.6033.200d.txt'); argv.append('--embdim'); argv.append('200');
+    #argv.append('--emb'); argv.append('embed/fasttext.sg.100d.txt'); argv.append('--embdim'); argv.append('100');##BEST
+    #argv.append('--emb'); argv.append('embed/fasttext.sg.200d.m1.txt'); argv.append('--embdim'); argv.append('200');
+    #argv.append('--emb'); argv.append('embed/fasttext.sg.200d.m2.txt'); argv.append('--embdim'); argv.append('200');
+    #argv.append('--emb'); argv.append('embed/fasttext.cb.200d.m2.txt'); argv.append('--embdim'); argv.append('200');
+    #argv.append('--emb'); argv.append('embed/fasttext.6033.200d.txt'); argv.append('--embdim'); argv.append('200');
     
-    #argv.append('--emb'); argv.append('/home/david/data/embed/sswe.w5.100d.txt'); argv.append('--embdim'); argv.append('100');
+    #argv.append('--emb'); argv.append('embed/sswe.w5.100d.txt'); argv.append('--embdim'); argv.append('100');
     
     #argv.append('--vocab-size'); argv.append('2560')
     
@@ -122,5 +121,8 @@ def get_args():
     #argv.append('--skip-emb-preload')
     #argv.append('--tokenize-old')
     argv.append('--min-word-freq'); argv.append('2')
+    
+    argv.append('--abs-root'); argv.append(absroot)
+    argv.append('--abs-data'); argv.append(absdata)
     
     return parse_args(argv)

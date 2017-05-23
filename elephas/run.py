@@ -24,13 +24,13 @@ def data():
     if args.seed > 0:
         np.random.seed(args.seed)
         
-    emb_reader = EmbReader(args.abs_emb_path, emb_dim=args.emb_dim)
+    emb_reader = EmbReader(args.emb_path, emb_dim=args.emb_dim)
     emb_words = emb_reader.load_words()
     
     dataset.set_score_range(args.data_set)
     (train_x, train_y, train_pmt), (dev_x, dev_y, dev_pmt), (test_x, test_y, test_pmt), vocab, vocab_size, overal_maxlen, num_outputs = dataset.get_data((args.train_path, args.dev_path, args.test_path), args.prompt_id, args.vocab_size, args.maxlen, tokenize_text=True, to_lower=True, sort_by_len=False, vocab_path=args.vocab_path, min_word_freq=args.min_word_freq, emb_words=emb_words)
     
-    abs_vocab_file = args.abs_out_path + 'vocab.pkl'
+    abs_vocab_file = args.abs_out_path + '/vocab.pkl'
     with open(abs_vocab_file, 'wb') as vocab_file:
         pk.dump(vocab, vocab_file)
     
@@ -113,7 +113,7 @@ def model(train_x, train_y, dev_x, dev_y, test_x, test_y, dev_y_org, test_y_org,
     dataset.set_score_range(args.data_set)
     evl = Evaluator(dataset, args.prompt_id, args.abs_out_path, dev_x, test_x, dev_y, test_y, dev_y_org, test_y_org, model_id=model_id)
     
-    abs_vocab_file = args.abs_out_path + 'vocab.pkl'
+    abs_vocab_file = args.abs_out_path + '/vocab.pkl'
     with open(abs_vocab_file, 'rb') as vocab_file:
         vocab = pk.load(vocab_file)
     
@@ -138,7 +138,8 @@ def model(train_x, train_y, dev_x, dev_y, test_x, test_y, dev_y_org, test_y_org,
     model.add(Activation('tanh'))
     model.emb_index = 0
     
-    abs_emb_path = '/home/david/data/embed/glove.6B.{}d.txt'.format(emb_dim)
+    emb_path = 'embed/glove.6B.{}d.txt'.format(emb_dim)
+    abs_emb_path = args.abs_root + emb_path
     
     from deepats.w2vEmbReader import W2VEmbReader as EmbReader
     emb_reader = EmbReader(abs_emb_path, emb_dim=emb_dim)
@@ -185,7 +186,7 @@ conf = SparkConf().setAppName('Elephas_Hyperparameter_Optimization').setMaster('
 sc = SparkContext(conf=conf)
 
 # Define hyper-parameter model and run optimization.
-hyperparam_model = HyperParamModel(sc, num_workers=8)
+hyperparam_model = HyperParamModel(sc, num_workers=2)
 best_model = hyperparam_model.minimize(model=model, data=data, max_evals=100)
 best_model_yaml = best_model.to_yaml()
 print(best_model_yaml)
