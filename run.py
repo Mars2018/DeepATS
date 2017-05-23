@@ -221,7 +221,7 @@ def run(argv=None):
 	
 	## OTHER METHODS
 	#optimizer = optimizers.Adam(lr=0.001, beta_1=0.9, beta_2=0.999, epsilon=1e-08, clipnorm=10)
-	optimizer = optimizers.Adam(lr=0.002, beta_1=0.9, beta_2=0.999, epsilon=1e-06, clipnorm=10)
+	#optimizer = optimizers.Adam(lr=0.002, beta_1=0.9, beta_2=0.999, epsilon=1e-06, clipnorm=10)
 	
 	#optimizer = optimizers.Adamax(lr=0.002, beta_1=0.9, beta_2=0.999, epsilon=1e-08, clipnorm=10)
 	#optimizer = optimizers.SGD(lr=0.05, momentum=0, decay=0.0, nesterov=False, clipnorm=10)
@@ -337,7 +337,7 @@ if __name__ == "__main__":
 	#data = 'asap1'; asap_reader.asap_ranges = asap_reader.asap1_ranges
 	data = 'asap2'; asap_reader.asap_ranges = asap_reader.asap2_ranges
 	
-	prompt = '3';
+	prompt = '2';
 	fold = '0'
 	
 	####################################################################################################
@@ -385,12 +385,12 @@ if __name__ == "__main__":
 	#argv.append('--stack'); argv.append('3')
 	
 	#argv.append('--cnndim'); argv.append('64')
-	argv.append('--rnndim'); argv.append('167')
+	argv.append('--rnndim'); argv.append('500')
 	
 	#argv.append('--stack'); argv.append('-3.25')
 	
 	#argv.append('--dropout'); argv.append('0.46')
-	argv.append('--dropout'); argv.append('0.25')
+	argv.append('--dropout'); argv.append('0.5')
 
 	#argv.append('--aggregation'); argv.append('attsum')
 	#argv.append('--aggregation'); argv.append('attmean')
