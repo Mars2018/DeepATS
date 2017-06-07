@@ -9,9 +9,10 @@ logger = logging.getLogger(__name__)
 class W2VEmbReader:
 	def __init__(self, emb_path, emb_dim=None):
 		#logger.info('Loading embeddings from: ' + emb_path)
+		emb_path = emb_path.format(emb_dim)
 		self.emb_path=emb_path
-		self.has_header=False
 		self.emb_dim_request=emb_dim
+		self.has_header=False
 		self.words = None
 		with codecs.open(emb_path, 'r', encoding='utf8') as emb_file:
 			tokens = emb_file.next().split()

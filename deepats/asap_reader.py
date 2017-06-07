@@ -271,13 +271,13 @@ def get_data(paths, prompt_id, vocab_size, maxlen, tokenize_text=True, to_lower=
 	if not vocab_path:
 		vocab = create_vocab(train_path, prompt_id, maxlen, vocab_size, tokenize_text, to_lower, min_word_freq, emb_words)
 		if len(vocab) < vocab_size:
-			logger.warning('The vocabualry includes only %i words (less than %i)' % (len(vocab), vocab_size))
+			logger.warning('The vocabulary includes only %i words (less than %i)' % (len(vocab), vocab_size))
 		else:
 			assert vocab_size == 0 or len(vocab) == vocab_size
 	else:
 		vocab = load_vocab(vocab_path)
 		if len(vocab) != vocab_size:
-			logger.warning('The vocabualry includes %i words which is different from given: %i' % (len(vocab), vocab_size))
+			logger.warning('The vocabulary includes %i words which is different from given: %i' % (len(vocab), vocab_size))
 	logger.info('  Vocab size: %i' % (len(vocab)))
 	
 	train_x, train_y, train_prompts, train_maxlen = read_dataset(train_path, prompt_id, maxlen, vocab, tokenize_text, to_lower)

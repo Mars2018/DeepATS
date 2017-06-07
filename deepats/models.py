@@ -21,8 +21,11 @@ def create_model(args, initial_mean_value, overal_maxlen, vocab):
 	## Create Model
 	#
 	
+	vocab_size = len(vocab)
+	
 	dropout_W = 0.5		# default=0.5
 	dropout_U = 0.1		# default=0.1
+	
 	cnn_border_mode='same'
 	if initial_mean_value.ndim == 0:
 		initial_mean_value = np.expand_dims(initial_mean_value, axis=1)
@@ -36,8 +39,12 @@ def create_model(args, initial_mean_value, overal_maxlen, vocab):
 		from deepats.rwa import RWA
 		
 		model = Sequential()
-		model.add(Embedding(args.vocab_size, args.emb_dim))
+		model.add(Embedding(vocab_size, args.emb_dim))
 		
+		for i in range(args.stack-1):
+			model.add(LSTM(args.rnn_dim, return_sequences=True, dropout=dropout_W, recurrent_dropout=dropout_U))
+			model.add(Dropout(args.dropout_prob))
+			
 		model.add(RWA(args.rnn_dim))
 		#model.add(Bidirectional(RWA(args.rnn_dim), merge_mode='ave'))# {'sum', 'mul', 'concat', 'ave'***, None}
 		
@@ -60,11 +67,11 @@ def create_model(args, initial_mean_value, overal_maxlen, vocab):
 		else:
 			mask_zero=True
 		model = Sequential()
-		model.add(Embedding(args.vocab_size, args.emb_dim, mask_zero=mask_zero))
+		model.add(Embedding(vocab_size, args.emb_dim, mask_zero=mask_zero))
 		
-		model.add(LSTM(args.rnn_dim, return_sequences=True, dropout=dropout_W, recurrent_dropout=dropout_U))
-		
-		model.add(Dropout(args.dropout_prob))
+		for i in range(args.stack):
+			model.add(LSTM(args.rnn_dim, return_sequences=True, dropout=dropout_W, recurrent_dropout=dropout_U))
+			model.add(Dropout(args.dropout_prob))
 		
 		## MEAN POOLING.
 		if POOL==1:
@@ -82,12 +89,13 @@ def create_model(args, initial_mean_value, overal_maxlen, vocab):
 		model.add(Dense(num_outputs, bias_initializer=Constant(value=bias_value)))
 		
 		model.add(Activation('sigmoid'))
+		#model.add(Activation('tanh'))
 		model.emb_index = 0
 		
 	elif args.model_type == 'regp_ORIG':
 		logger.info('Building a REGRESSION model with POOLING')
 		model = Sequential()
-		model.add(Embedding(args.vocab_size, args.emb_dim, mask_zero=True))
+		model.add(Embedding(vocab_size, args.emb_dim, mask_zero=True))
 		if args.cnn_dim > 0:
 			model.add(Conv1DWithMasking(nb_filter=args.cnn_dim, filter_length=args.cnn_window_size, border_mode=cnn_border_mode, subsample_length=1))
 		if args.rnn_dim > 0:

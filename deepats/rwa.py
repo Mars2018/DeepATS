@@ -20,9 +20,11 @@ class RWA(Recurrent):
 #     @interfaces.legacy_recurrent_support
     def __init__(self, units,
                  activation='tanh',
-                 #recurrent_activation='tanh',
+                 
+                 recurrent_activation='tanh',
                  #recurrent_activation='hard_sigmoid',
-                 recurrent_activation='relu',
+                 #recurrent_activation='relu',
+                 
                  features_initializer='glorot_uniform',
                  recurrent_initializer='glorot_uniform',
                  average_initializer = 'glorot_uniform',

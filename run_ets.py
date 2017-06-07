@@ -1,26 +1,27 @@
 #!/usr/bin/env python
 
-##################################
-## set theano/tensorflow in:
-## ~/.keras/keras.json
-##################################
-
+import os
+import sys
 import argparse
 import logging
 import numpy as np
 import scipy
 from time import time
-import sys
 import deepats.utils as U
 import pickle as pk
-from deepats import asap_reader
+
+from deepats.ets_evaluator import Evaluator
+import deepats.ets_reader as dataset
 
 from keras.models import model_from_yaml
 
 logger = logging.getLogger(__name__)
 
+##################################
+## set theano/tensorflow in:
+## ~/.keras/keras.json
+##################################
 
-###############################################
 ## kappa loss
 import keras.backend as K
 #import theano.tensor as T
@@ -40,13 +41,9 @@ def kappa_loss(t,x):
 ###############################################################################################################################
 ## Parse arguments
 #
-
 def run(argv=None):
 
 	parser = argparse.ArgumentParser()
-	parser.add_argument("-tr", "--train", dest="train_path", type=str, metavar='<str>', required=True, help="The path to the training set")
-	parser.add_argument("-tu", "--tune", dest="dev_path", type=str, metavar='<str>', required=True, help="The path to the development set")
-	parser.add_argument("-ts", "--test", dest="test_path", type=str, metavar='<str>', required=True, help="The path to the test set")
 	parser.add_argument("-o", "--out-dir", dest="out_dir_path", type=str, metavar='<str>', required=True, help="The path to the output directory")
 	parser.add_argument("-p", "--prompt", dest="prompt_id", type=int, metavar='<int>', required=False, help="Promp ID for ASAP dataset. '0' means all prompts.")
 	parser.add_argument("-t", "--type", dest="model_type", type=str, metavar='<str>', default='regp', help="Model type (reg|regp|breg|bregp) (default=regp)")
@@ -69,25 +66,23 @@ def run(argv=None):
 	parser.add_argument("--seed", dest="seed", type=int, metavar='<int>', default=1234, help="Random seed (default=1234)")
 	## dsv
 	parser.add_argument("--min-word-freq", dest="min_word_freq", type=int, metavar='<int>', default=2, help="Min word frequency")
-	parser.add_argument("--stack", dest="stack", type=float, metavar='<float>', default=1, help="how deep to stack core RNN")
+	parser.add_argument("--stack", dest="stack", type=int, metavar='<int>', default=1, help="how deep to stack core RNN")
 	parser.add_argument("--skip-emb-preload", dest="skip_emb_preload", action='store_true', help="Skip preloading embeddings")
 	parser.add_argument("--tokenize-old", dest="tokenize_old", action='store_true', help="use old tokenizer")
 	
 	parser.add_argument("-ar", "--abs-root", dest="abs_root", type=str, metavar='<str>', required=False, help="Abs path to root directory")
 	parser.add_argument("-ad", "--abs-data", dest="abs_data", type=str, metavar='<str>', required=False, help="Abs path to data directory")
 	parser.add_argument("-ao", "--abs-out", dest="abs_out", type=str, metavar='<str>', required=False, help="Abs path to output directory")
+	parser.add_argument("-dp", "--data-path", dest="data_path", type=str, metavar='<str>', required=False, help="Abs path to output directory")
 	##
 	
 	if argv is None:
 		args = parser.parse_args()
 	else:
 		args = parser.parse_args(argv)
-		
-	setattr(args, 'abs_emb_path', args.abs_root + args.emb_path)
 	
-	out_dir = args.out_dir_path
-	
-	U.mkdir_p(out_dir + '/preds')
+	out_dir = args.abs_out
+	U.mkdir_p( os.path.join(out_dir, 'preds'))
 	U.set_logger(out_dir)
 	U.print_args(args)
 	
@@ -98,18 +93,20 @@ def run(argv=None):
 	assert args.aggregation in {'mot', 'attsum', 'attmean'}
 	
 	if args.seed > 0:
-		np.random.seed(args.seed)
-	
-	if args.tokenize_old:
-		asap_reader.token = 0
-		logger.info('using OLD tokenizer!')
-		
-	if args.prompt_id>=0:
-		from deepats.asap_evaluator import Evaluator
-		import deepats.asap_reader as dataset
+		RANDSEED = args.seed
 	else:
-		raise NotImplementedError
+		RANDSEED = np.random.randint(10000)
+	np.random.seed(RANDSEED)
 	
+	
+	#######################
+	
+	#from deepats.util import GPUtils as GPU
+	import GPUtil as GPU
+	mem = GPU.avail_mem()
+	logger.info('AVAIL GPU MEM == %.4f' % mem)
+# 	if mem < 0.05:
+# 		return None
 	###############################################################################################################################
 	## Prepare data
 	#
@@ -120,28 +117,31 @@ def run(argv=None):
 		logger.info('Loading embedding vocabulary...')
 		emb_reader = EmbReader(args.emb_path, emb_dim=args.emb_dim)
 		emb_words = emb_reader.load_words()
+		
+	train_df, dev_df, test_df, vocab, overal_maxlen, qwks = dataset.get_data(args.data_path, emb_words=emb_words, seed=RANDSEED)
+	vocab_size = len(vocab)
 	
-	from keras.preprocessing import sequence
-	
-	# data_x is a list of lists
-	(train_x, train_y, train_pmt), (dev_x, dev_y, dev_pmt), (test_x, test_y, test_pmt), vocab, vocab_size, overal_maxlen, num_outputs = dataset.get_data(
-		(args.train_path, args.dev_path, args.test_path), args.prompt_id, args.vocab_size, args.maxlen, tokenize_text=True, to_lower=True, sort_by_len=False, 
-		vocab_path=args.vocab_path, min_word_freq=args.min_word_freq, emb_words=emb_words)
-	
+	train_x = train_df['text'].values;	train_y = train_df['y'].values
+	dev_x = dev_df['text'].values; 		dev_y = dev_df['y'].values
+	test_x = test_df['text'].values;	test_y = test_df['y'].values
+
 	# Dump vocab
-	with open(out_dir + '/vocab.pkl', 'wb') as vocab_file:
+
+	abs_vocab_file = os.path.join(out_dir, 'vocab.pkl')
+	with open(os.path.join(out_dir, 'vocab.pkl'), 'wb') as vocab_file:
 		pk.dump(vocab, vocab_file)
 	
 	if args.recurrent_unit == 'rwa':
 		setattr(args, 'model_type', 'rwa')
 		
 	# Pad sequences for mini-batch processing
+	from keras.preprocessing import sequence
+	
 	if args.model_type in {'breg', 'bregp', 'rwa'}:
 		assert args.rnn_dim > 0
 		train_x = sequence.pad_sequences(train_x, maxlen=overal_maxlen)
 		dev_x = sequence.pad_sequences(dev_x, maxlen=overal_maxlen)
 		test_x = sequence.pad_sequences(test_x, maxlen=overal_maxlen)
-		#assert args.recurrent_unit == 'lstm'
 	else:
 		train_x = sequence.pad_sequences(train_x)
 		dev_x = sequence.pad_sequences(dev_x)
@@ -149,21 +149,13 @@ def run(argv=None):
 	
 	###############################################################################################################################
 	## Some statistics
-	#
 	
-	import keras.backend as K
-	
-	train_y = np.array(train_y, dtype=K.floatx())
-	dev_y = np.array(dev_y, dtype=K.floatx())
-	test_y = np.array(test_y, dtype=K.floatx())
-	
-	if args.prompt_id:
-		train_pmt = np.array(train_pmt, dtype='int32')
-		dev_pmt = np.array(dev_pmt, dtype='int32')
-		test_pmt = np.array(test_pmt, dtype='int32')
+# 	train_y = np.array(train_y, dtype=K.floatx())
+# 	dev_y = np.array(dev_y, dtype=K.floatx())
+# 	test_y = np.array(test_y, dtype=K.floatx())
 	
 	bincounts, mfs_list = U.bincounts(train_y)
-	with open('%s/bincounts.txt' % out_dir, 'w') as output_file:
+	with open(os.path.join(out_dir,'bincounts.txt'), 'w') as output_file:
 		for bincount in bincounts:
 			output_file.write(str(bincount) + '\n')
 	
@@ -175,28 +167,16 @@ def run(argv=None):
 	test_std = test_y.std(axis=0)
 	
 	logger.info('Statistics:')
-	
+	logger.info('  TEST KAPPAS (float, int)= \033[92m%.4f (%.4f)\033[0m ' % (qwks[1], qwks[0]))
+	logger.info('  RANDSEED =   ' + str(RANDSEED))
 	logger.info('  train_x shape: ' + str(np.array(train_x).shape))
 	logger.info('  dev_x shape:   ' + str(np.array(dev_x).shape))
 	logger.info('  test_x shape:  ' + str(np.array(test_x).shape))
-	
 	logger.info('  train_y shape: ' + str(train_y.shape))
 	logger.info('  dev_y shape:   ' + str(dev_y.shape))
 	logger.info('  test_y shape:  ' + str(test_y.shape))
-	
 	logger.info('  train_y mean: %s, stdev: %s, MFC: %s' % (str(train_mean), str(train_std), str(mfs_list)))
-	
 	logger.info('  overal_maxlen:  ' + str(overal_maxlen))
-	
-	# We need the dev and test sets in the original scale for evaluation
-	dev_y_org = dev_y.astype(dataset.get_ref_dtype())
-	test_y_org = test_y.astype(dataset.get_ref_dtype())
-	train_y_org = train_y.astype(dataset.get_ref_dtype())
-	
-	# Convert scores to boundary of [0 1] for training and evaluation (loss calculation)
-	train_y = dataset.get_model_friendly_scores(train_y, train_pmt)
-	dev_y = dataset.get_model_friendly_scores(dev_y, dev_pmt)
-	test_y = dataset.get_model_friendly_scores(test_y, test_pmt)
 	
 	###############################################################################################################################
 	## Optimizaer algorithm
@@ -209,8 +189,10 @@ def run(argv=None):
 	
 	## RMS-PROP
 	
-	#optimizer = optimizers.RMSprop(lr=0.001, rho=0.9, epsilon=1e-6, clipnorm=10)
-	optimizer = optimizers.RMSprop(lr=0.0018, rho=0.88, epsilon=1e-6, clipnorm=10)
+	#optimizer = optimizers.RMSprop(lr=0.00075, rho=0.9, clipnorm=1)
+	#optimizer = optimizers.RMSprop(lr=0.001, rho=0.9, clipnorm=1)
+	optimizer = optimizers.RMSprop(lr=0.001, rho=0.9, epsilon=1e-6, clipnorm=10)
+	#optimizer = optimizers.RMSprop(lr=0.0018, rho=0.88, epsilon=1e-6, clipnorm=10)
 		
 	#optimizer = optimizers.RMSprop(lr=0.001, rho=0.9, epsilon=1e-8, clipnorm=10)
 	#optimizer = optimizers.RMSprop(lr=0.004, rho=0.85, epsilon=1e-6, clipnorm=10)# best 2.1 (RWA)
@@ -220,7 +202,8 @@ def run(argv=None):
 	#optimizer = optimizers.RMSprop(lr=0.004, rho=0.85, epsilon=1e-8, clipnorm=10) # best 2.10 (RWA)
 	
 	## OTHER METHODS
-	#optimizer = optimizers.Adam(lr=0.001, beta_1=0.9, beta_2=0.999, epsilon=1e-08, clipnorm=10)
+	#optimizer = optimizers.Adam(lr=0.0018, clipnorm=5)
+	#optimizer = optimizers.Adam(lr=0.001, beta_1=0.9, beta_2=0.999, epsilon=1e-08, clipnorm=1)
 	#optimizer = optimizers.Adam(lr=0.002, beta_1=0.9, beta_2=0.999, epsilon=1e-06, clipnorm=10)
 	
 	#optimizer = optimizers.Adamax(lr=0.002, beta_1=0.9, beta_2=0.999, epsilon=1e-08, clipnorm=10)
@@ -231,29 +214,19 @@ def run(argv=None):
 	###############################################################################################################################
 	## Building model
 	#
-	
-	from deepats.models import create_model
-	N=1; L=0
 	if args.loss == 'mse':
 		loss = 'mean_squared_error'
-		#metric = 'mean_absolute_error'; metric_name = metric
 		metric = kappa_metric; metric_name = 'kappa_metric'
 	elif args.loss == 'mae':
 		loss = 'mean_absolute_error'
-		#metric = 'mean_squared_error'; metric_name = metric
 		metric = kappa_metric; metric_name = 'kappa_metric'
 	elif args.loss == 'kappa':
 		loss = kappa_loss
 		metric = kappa_metric; metric_name = 'kappa_metric'
-
-	########################################################
-	
-	if N>1:
-		train_y_hot = np.eye(N)[train_y_org-L].astype('float32')
-		train_y = train_y_hot
 	
 	########################################################
 	
+	from deepats.models import create_model
 	model = create_model(args, train_y.mean(axis=0), overal_maxlen, vocab)
 	
 	############################################
@@ -274,24 +247,22 @@ def run(argv=None):
 	###############################################################################################################################
 	## Plotting model
 	#
-	
 # 	from keras.utils.visualize_util import plot
-# 	plot(model, to_file = out_dir + '/model.png')
+# 	plot(model, to_file = os.path.join(out_dir,'model.png'))
 	
 	###############################################################################################################################
 	## Save model architecture
 	#
 	
 	logger.info('Saving model architecture')
-	with open(out_dir + '/model_arch.json', 'w') as arch:
+	with open(os.path.join(out_dir, 'model_arch.json'), 'w') as arch:
 		arch.write(model.to_json(indent=2))
 	logger.info('  Done')
 		
 	###############################################################################################################################
 	## Evaluator
 	#
-	
-	evl = Evaluator(dataset, args.prompt_id, out_dir, dev_x, test_x, dev_y, test_y, dev_y_org, test_y_org, N, L)
+	evl = Evaluator(dataset, args.prompt_id, out_dir, dev_x, test_x, dev_df, test_df)
 	
 	###############################################################################################################################
 	## Training
@@ -334,40 +305,40 @@ def run(argv=None):
 
 if __name__ == "__main__":
 	
-	#data = 'asap1'; asap_reader.asap_ranges = asap_reader.asap1_ranges
-	data = 'asap2'; asap_reader.asap_ranges = asap_reader.asap2_ranges
+	prompt = '61891';
+	# 57452 54147 61693 61915 70086* 61875 
+	# 55433 61247 61352* 54735 61923* 
+	# 55052 62037 61891*
 	
-	prompt = '2';
-	fold = '0'
+	# 55417* : RANDSEED=9830 300x300 test-qwk= 0.8065 (0.7818) VS TEST KAPPAS (float, int)= 0.8094 (0.7753)
+	# 55403* : RANDSEED=8636 300x300 optimizer = optimizers.RMSprop(lr=0.001, rho=0.9, epsilon=1e-6, clipnorm=10)
+	# 61891* : 50x100
+	#################
 	
-	####################################################################################################
-		
-	#dataroot = 'data/'+data+'/fold_'+fold+'/'
-	asap_reader.set_score_range(data)
+	dataroot = '/home/david/data/ats/ets'
+	datapath = os.path.join(dataroot, prompt)
 	
-	deepatsroot = '/home/david/code/python/deepats/'
-	outroot = deepatsroot + 'output/'
+	deepatsroot = '/home/david/code/python/DeepATS'
+	outroot = os.path.join(deepatsroot, 'output')
 	
-	asaproot = '/home/david/data/ats/asap/'
-	dataroot = asaproot + data + '/fold_' +fold+ '/'
-	
-	args = '-tr '+dataroot+'train.tsv -tu '+dataroot+'dev.tsv -ts '+dataroot+'test.tsv -o output'
+	args = '-o output'
 	argv = args.split()
 	
 	argv.append('--prompt'); argv.append(prompt)
 	
-	#argv.append('--batch-size'); argv.append('64')
+	#argv.append('--batch-size'); argv.append('32')
 	argv.append('--batch-size'); argv.append('64')
+	#argv.append('--batch-size'); argv.append('128')
 	
 	
 	argv.append('--loss'); argv.append('kappa')
 	#argv.append('--loss'); argv.append('soft_kappa')
 	#argv.append('--loss'); argv.append('mse')
 	
-	#argv.append('--emb'); argv.append('/home/david/data/embed/glove.6B.50d.txt')
+	argv.append('--emb'); argv.append('/home/david/data/embed/glove.6B.50d.txt')
 	#argv.append('--emb'); argv.append('/home/david/data/embed/glove.6B.100d.txt'); argv.append('--embdim'); argv.append('100');
 	#argv.append('--emb'); argv.append('/home/david/data/embed/glove.6B.200d.txt'); argv.append('--embdim'); argv.append('200');
-	argv.append('--emb'); argv.append('/home/david/data/embed/glove.6B.300d.txt'); argv.append('--embdim'); argv.append('300');
+	#argv.append('--emb'); argv.append('/home/david/data/embed/glove.6B.300d.txt'); argv.append('--embdim'); argv.append('300');
 	
 	#argv.append('--emb'); argv.append('/home/david/data/embed/lexvec.commoncrawl.300d.W.pos.neg3.txt'); argv.append('--embdim'); argv.append('300');
 	
@@ -382,13 +353,15 @@ if __name__ == "__main__":
 	#argv.append('--vocab-size'); argv.append('2560')
 	
 	argv.append('--rec-unit'); argv.append('rwa')
-	#argv.append('--stack'); argv.append('3')
+	#argv.append('--stack'); argv.append('2')
 	
 	#argv.append('--cnndim'); argv.append('64')
-	argv.append('--rnndim'); argv.append('500')
 	
-	#argv.append('--stack'); argv.append('-3.25')
-	
+	#argv.append('--rnndim'); argv.append('167')
+	#argv.append('--rnndim'); argv.append('200')
+	#argv.append('--rnndim'); argv.append('250')
+	argv.append('--rnndim'); argv.append('100')
+		
 	#argv.append('--dropout'); argv.append('0.46')
 	argv.append('--dropout'); argv.append('0.5')
 
@@ -400,7 +373,8 @@ if __name__ == "__main__":
 	#argv.append('--algorithm'); argv.append('sgd')
 	#argv.append('--algorithm'); argv.append('adagrad')
 	
-	#argv.append('--seed'); argv.append('629692')
+	#argv.append('--seed'); argv.append('0')
+	argv.append('--seed'); argv.append('4357638')
 	
 	#argv.append('--skip-emb-preload')
 	#argv.append('--tokenize-old')
@@ -409,6 +383,7 @@ if __name__ == "__main__":
 	argv.append('--abs-root'); argv.append(deepatsroot)
 	argv.append('--abs-data'); argv.append(dataroot)
 	argv.append('--abs-out'); argv.append(outroot)
+	argv.append('--data-path'); argv.append(datapath)
 	
 	argv.append('--epochs'); argv.append('100')
 	
