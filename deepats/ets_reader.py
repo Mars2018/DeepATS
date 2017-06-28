@@ -9,7 +9,8 @@ import codecs
 import nltk
 import logging
 import pickle as pk
-from sklearn.cross_validation import train_test_split
+#from sklearn.cross_validation import train_test_split
+from sklearn.model_selection import train_test_split
 
 from my_kappa_calculator import quadratic_weighted_kappa as qwk
 
@@ -143,7 +144,7 @@ def qwok(t,y):
 	return k
 
 def get_data(data_path, 
-			dev_split=0.12, 
+			dev_split=0.15, 
 			tokenize_text=True, 
 			to_lower=True, 
 			vocab_path=None, 
@@ -173,9 +174,15 @@ def get_data(data_path,
 	k1 = qwk(t_test.astype('int32'), yint_test, df['yint'].min(), df['yint'].max())
 	k2 = qwok(t_test, y_test)
 	
-     # stratified train/dev split
+	# stratified train/dev split
 	df2 = df.loc[df['id'].isin(train_ids)]
 	y = df2.pop('yint')
+	
+	if dev_split<=0:
+		n_train=len(y)
+		n_test=len(y_test)
+		dev_split = n_test/n_train
+	
 	X_train, X_dev, y_train, y_dev = train_test_split( df2, y, stratify=y, test_size=dev_split, random_state=seed)
 	train_ids = X_train['id'].values
 	dev_ids = X_dev['id'].values
