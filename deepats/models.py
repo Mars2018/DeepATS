@@ -36,7 +36,9 @@ def create_model(args, initial_mean_value, overal_maxlen, vocab):
 	
 	elif args.model_type == 'rwa':
 		logger.info('Building a RWA model')
+		
 		from deepats.rwa import RWA
+# 		from deepats.RWACell import RWACell as RWA
 		
 		model = Sequential()
 		model.add(Embedding(vocab_size, args.emb_dim))
@@ -58,9 +60,9 @@ def create_model(args, initial_mean_value, overal_maxlen, vocab):
 		model.emb_index = 0
 	
 	elif args.model_type == 'regp':
-		logger.info('Building a REGRESSION model with POOLING')
+		logger.info('Building an LSTM REGRESSION model with POOLING')
 		
-		POOL=2
+		POOL=2 #2
 		
 		if POOL==1:
 			mask_zero=False

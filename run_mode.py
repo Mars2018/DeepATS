@@ -7,14 +7,24 @@ import logging
 import numpy as np
 import scipy
 from time import time
-import deepats.utils as U
 import pickle as pk
-
-from deepats.ets_evaluator import Evaluator
-import deepats.ets_reader as dataset
 
 from keras.models import model_from_yaml
 from keras.callbacks import Callback, ReduceLROnPlateau, ModelCheckpoint
+
+from sklearn.metrics import precision_recall_curve, average_precision_score
+from tabulate import tabulate
+
+import deepats.utils as U
+from deepats.ets_evaluator import Evaluator
+
+# from deepats import ets_reader
+from nlp.readers import ets_reader
+from nlp.readers.essay_reader import EssaySetReader
+
+
+REGEX_NUM = r'^[0-9]*\t[0-9]\t[0-9]\t[0-9]\t(?!\s*$).+'
+REGEX_MODE = r'^[0-9]*\tm\tm\tm\t(?!\s*$).+'
 
 logger = logging.getLogger(__name__)
 
@@ -27,19 +37,101 @@ logger = logging.getLogger(__name__)
 import keras.backend as K
 #import theano.tensor as T
 
+# numpy sort by col
+def sortrows(x,col=0,asc=True):
+    n=-1
+    if asc:
+        n=1
+    x=x*n
+    return n*x[x[:,col].argsort()]
+	
+def stats((y,p),n=None):
+	pre, rec, _ = precision_recall_curve(y, p)
+	pos = int(y.sum())
+	tot = len(y)
+	if n:
+		pos = int(pos * float(n)/tot)
+		tot = int(n)
+	
+	M = []
+	for i in range(20):
+		r = 1.0 - i*.05
+		if r<0.5:
+			break
+		j = np.argmax(rec<=r)
+		pj,rj = pre[j], rec[j]
+		tp = pos*rj
+		fp = fp = tp/pj - tp
+		fn = pos-tp
+		tn = tot-tp-fp-fn
+		M.append([pj,rj,int(round(fp)),int(round(fn)),int(round(tp)),int(round(tn))])
+		if pj==1:
+			break
+	
+	M.insert(0,['Prec','Rec','FP','FN','TP','TN'])
+	return M
+
+def down_sample(y,p,q):
+	x = np.vstack((y,p)).T
+	x = sortrows(x,col=1,asc=False)
+	y=x[:,0]
+	p=x[:,1]
+	f = np.squeeze(np.where(y==1))
+	a1,b = y.sum(),len(y)
+	a2 = round(b*q)
+	yy,pp = y,p
+	if a1-a2>0:
+		ff = np.random.choice(f,int(a1-a2),replace=False)
+		yy=np.delete(y,ff)
+		pp=np.delete(p,ff)
+	return (yy,pp)
+
+def down_sample_bootstrap(y,p,q,n=1000):
+	V = []
+	X = []
+	for i in np.arange(n):
+		(yy,pp) = down_sample(y,p,q)
+		V.append(average_precision_score(yy,pp))
+		X.append((yy,pp))
+	v = np.mean(V)
+	f = np.argmax(abs(v-V)==np.min(abs(v-V)))
+	return X[f]
+
+def print_table(y, p, q, n=1000):
+	print('\n{0}% Off-Mode (sample size= {1}):'.format(int(q*100),n))
+	print tabulate(stats(down_sample_bootstrap(y,p,q),n), headers="firstrow", floatfmt='.3f')
+		
+def print_tables(y, p, Q=[0.1,0.05,0.01], n=1000):
+	print_table(y, p, q, n=n)
+
+# 	print tabulate(stats((y,p),1000), headers="firstrow", floatfmt='.3f')
+# 	print tabulate(stats(down_sample(y,p,0.01),1000), headers="firstrow", floatfmt='.3f')
+# 	print tabulate(stats(down_sample_bootstrap(y,p,0.01),1000), headers="firstrow", floatfmt='.3f')
+
+
+# def stats(y,p,T):
+# 	x = np.vstack((y,p)).T
+# 	x = sortrows(x,col=1,asc=False)
+# 	y=x[:,0]
+# 	p=x[:,1]
+# 	t=T[0]
+# 	yy=(p>t).astype('float')
+# 	m = confusion_matrix(y, yy)
+# 	fp,fn,tp,tn = m[0,1],m[1,0],m[0,0],m[1,1]
+	
 def kappa(t,x):
 	u = 0.5 * K.sum(K.square(x - t))
 	v = K.dot(K.transpose(x), t - K.mean(t))
 	return v / (v + u)
 
-# theano
+## theano
 def kappa_loss(t,x):
 	u = K.sum(K.square(x - t))
 	v = K.dot(K.squeeze(x,1), K.squeeze(t - K.mean(t),1))##v = T.tensordot(x, t - K.mean(t))
 	return u / (2*v + u)# =1-qwk
 
 # numpy kappa
-def nkappa(t,x):
+def qwk(t,x):
 	u = 0.5 * np.sum(np.square(x - t))
 	v = np.dot(np.transpose(x), t - np.mean(t))
 	return v / (v + u)
@@ -51,7 +143,7 @@ def run(argv=None):
 
 	parser = argparse.ArgumentParser()
 	parser.add_argument("-o", "--out-dir", dest="out_dir_path", type=str, metavar='<str>', required=True, help="The path to the output directory")
-	parser.add_argument("-p", "--prompt", dest="prompt_id", type=int, metavar='<int>', required=False, help="Promp ID for ASAP dataset. '0' means all prompts.")
+	parser.add_argument("-p", "--prompt", dest="prompt_id", type=str, metavar='<str>', required=False, help="Promp ID for ASAP dataset. '0' means all prompts.")
 	parser.add_argument("-t", "--type", dest="model_type", type=str, metavar='<str>', default='regp', help="Model type (reg|regp|breg|bregp) (default=regp)")
 	parser.add_argument("-u", "--rec-unit", dest="recurrent_unit", type=str, metavar='<str>', default='lstm', help="Recurrent unit type (lstm|gru|simple) (default=lstm)")
 	parser.add_argument("-a", "--algorithm", dest="algorithm", type=str, metavar='<str>', default='rmsprop', help="Optimization algorithm (rmsprop|sgd|adagrad|adadelta|adam|adamax) (default=rmsprop)")
@@ -69,7 +161,9 @@ def run(argv=None):
 	parser.add_argument("--emb", dest="emb_path", type=str, metavar='<str>', help="The path to the word embeddings file (Word2Vec format)")
 	parser.add_argument("--epochs", dest="epochs", type=int, metavar='<int>', default=100, help="Number of epochs (default=50)")
 	parser.add_argument("--maxlen", dest="maxlen", type=int, metavar='<int>', default=0, help="Maximum allowed number of words during training. '0' means no limit (default=0)")
-	parser.add_argument("--seed", dest="seed", type=int, metavar='<int>', default=1234, help="Random seed (default=1234)")
+	parser.add_argument("--seed", dest="seed", type=int, metavar='<int>', default=0, help="Random seed (default=1234)")
+	parser.add_argument("--mode", dest="run_mode", type=str, metavar='<str>', default='train', help="run mode")
+	
 	## dsv
 	parser.add_argument("--min-word-freq", dest="min_word_freq", type=int, metavar='<int>', default=2, help="Min word frequency")
 	parser.add_argument("--stack", dest="stack", type=int, metavar='<int>', default=1, help="how deep to stack core RNN")
@@ -105,12 +199,15 @@ def run(argv=None):
 	np.random.seed(RANDSEED)
 	
 	
+	pid = args.prompt_id
+	mode = args.run_mode
+	
 	#######################
 	
 	#from deepats.util import GPUtils as GPU
-	import GPUtil as GPU
-	mem = GPU.avail_mem()
-	logger.info('AVAIL GPU MEM == %.4f' % mem)
+# 	import GPUtil as GPU
+# 	mem = GPU.avail_mem()
+# 	logger.info('AVAIL GPU MEM == %.4f' % mem)
 # 	if mem < 0.05:
 # 		return None
 	###############################################################################################################################
@@ -123,22 +220,31 @@ def run(argv=None):
 		logger.info('Loading embedding vocabulary...')
 		emb_reader = EmbReader(args.emb_path, emb_dim=args.emb_dim)
 		emb_words = emb_reader.load_words()
-		
-	train_df, dev_df, test_df, vocab, overal_maxlen, qwks = dataset.get_data(args.data_path, emb_words=emb_words, seed=RANDSEED)
-	vocab_size = len(vocab)
 	
-	train_x = train_df['text'].values;	train_y = train_df['y'].values
-	dev_x = dev_df['text'].values; 		dev_y = dev_df['y'].values
-	test_x = test_df['text'].values;	test_y = test_df['y'].values
-
-	# Dump vocab
-
+	vocab_path = None
 	abs_vocab_file = os.path.join(out_dir, 'vocab.pkl')
-	with open(os.path.join(out_dir, 'vocab.pkl'), 'wb') as vocab_file:
-		pk.dump(vocab, vocab_file)
+	if mode=='test':
+		vocab_path = abs_vocab_file
+	
+	train_df, dev_df, test_df, vocab, overal_maxlen = ets_reader.get_mode_data(	args.data_path,
+																				dev_split=0.1,
+																				emb_words=emb_words,
+																				vocab_path=vocab_path,
+																				seed=RANDSEED)
+	
+	train_x = train_df['text'].values;	train_y = train_df['yint'].values.astype('float32')
+	dev_x = dev_df['text'].values; 		dev_y = dev_df['yint'].values.astype('float32')
+	test_x = test_df['text'].values;	test_y = test_df['yint'].values.astype('float32')
+	
+	# Dump vocab
+	if mode=='train':
+		with open(os.path.join(out_dir, 'vocab.pkl'), 'wb') as vocab_file:
+			pk.dump(vocab, vocab_file)
 	
 	if args.recurrent_unit == 'rwa':
 		setattr(args, 'model_type', 'rwa')
+	if args.recurrent_unit == 'lstm':
+		setattr(args, 'model_type', 'regp')
 		
 	# Pad sequences for mini-batch processing
 	from keras.preprocessing import sequence
@@ -165,7 +271,6 @@ def run(argv=None):
 	
 	logger.info('Statistics:')
 	logger.info('  PROMPT_ID\t= ' + U.b_green(args.prompt_id))
-	logger.info('  TEST KAPPAS\t= {} (float, int)'.format(U.b_green('%.4f (%.4f)')) % (qwks[1], qwks[0]))
 	logger.info('  RANDSEED\t= ' + U.b_green(str(RANDSEED)))
 	logger.info('  train_x shape: ' + str(np.array(train_x).shape))
 	logger.info('  dev_x shape:   ' + str(np.array(dev_x).shape))
@@ -183,55 +288,44 @@ def run(argv=None):
 	from deepats.optimizers import get_optimizer
 	#optimizer = get_optimizer(args)
 	
-	## RMS-PROP
+# 	optimizer = optimizers.Adam(lr=0.002, beta_1=0.9, beta_2=0.999, epsilon=1e-08, clipnorm=10)#***RWA***
 	
-	#optimizer = optimizers.RMSprop(lr=0.00075, rho=0.9, clipnorm=1)
-	#optimizer = optimizers.RMSprop(lr=0.001, rho=0.9, clipnorm=1)
-	optimizer = optimizers.RMSprop(lr=0.003, rho=0.88, epsilon=1e-6, clipnorm=10)
-	#optimizer = optimizers.RMSprop(lr=0.0018, rho=0.88, epsilon=1e-6, clipnorm=10)
-		
-	#optimizer = optimizers.RMSprop(lr=0.001, rho=0.9, epsilon=1e-8, clipnorm=10)
-	#optimizer = optimizers.RMSprop(lr=0.004, rho=0.85, epsilon=1e-6, clipnorm=10)# best 2.1 (RWA)
-	#optimizer = optimizers.RMSprop(lr=0.0025, rho=0.8, epsilon=1e-8, clipnorm=10) # best 2.1 (RWA)
-	#optimizer = optimizers.RMSprop(lr=0.001, rho=0.9, epsilon=1e-8, clipnorm=10) # best 2.3 (RWA)
-	#optimizer = optimizers.RMSprop(lr=0.0025, rho=0.88, epsilon=1e-8, clipnorm=10) # best 2.3 (RWA)
-	#optimizer = optimizers.RMSprop(lr=0.004, rho=0.85, epsilon=1e-8, clipnorm=10) # best 2.10 (RWA)
+	optimizer = optimizers.Adam(lr=0.001, beta_1=0.9, beta_2=0.999, epsilon=1e-08, clipnorm=1)
+
+# 	optimizer = optimizers.Nadam(lr=0.001, clipnorm=10)
+# 	optimizer = optimizers.Nadam(lr=0.002, clipnorm=1)
+	
+# 	optimizer = optimizers.RMSprop(lr=0.0015, rho=0.9, epsilon=1e-8, clipnorm=10)
+# 	optimizer = optimizers.RMSprop(lr=0.003, rho=0.88, epsilon=1e-6, clipnorm=10)
+# 	optimizer = optimizers.RMSprop(lr=0.0025, rho=0.8, epsilon=1e-8, clipnorm=10) # best 2.1 (RWA)
+
 	
 	## OTHER METHODS
 	#optimizer = optimizers.Adam(lr=0.0018, clipnorm=5)
-	#optimizer = optimizers.Adam(lr=0.001, beta_1=0.9, beta_2=0.999, epsilon=1e-08, clipnorm=1)
-	#optimizer = optimizers.Adam(lr=0.002, beta_1=0.9, beta_2=0.999, epsilon=1e-06, clipnorm=10)
-	
 	#optimizer = optimizers.Nadam(lr=0.002)
-	
 	#optimizer = optimizers.Adamax(lr=0.002, beta_1=0.9, beta_2=0.999, epsilon=1e-08, clipnorm=10)
 	#optimizer = optimizers.SGD(lr=0.05, momentum=0, decay=0.0, nesterov=False, clipnorm=10)
 	#optimizer = optimizers.Adagrad(lr=0.03, epsilon=1e-08, clipnorm=10)
-	#optimizer = optimizers.Adadelta(lr=1.0, rho=0.95, epsilon=1e-06, clipnorm=10)
 	
 	###############################################################################################################################
 	## Building model
-	#
-	loss = kappa_loss
-	metric_name = 'kappa'
-	
-	########################################################
-	
 	from deepats.models import create_model
+	
+	#loss = kappa_loss
+	#metrics = [kappa,'mean_squared_error']
+	
+	if args.loss == 'mse':
+		loss = 'mean_squared_error'
+		metrics = ['acc']
+# 		metrics = [kappa]
+		monitor='val_kappa'
+	elif args.loss == 'kappa':
+		loss = kappa_loss
+		metrics = [kappa]
+		monitor='val_kappa'
+	
 	model = create_model(args, train_y.mean(axis=0), overal_maxlen, vocab)
-	
-	############################################
-	'''
-	# test yaml serialization/de-serialization
-	yaml = model.to_yaml()
-	print yaml
-	from deepats.my_layers import MeanOverTime
-	from deepats.rwa import RWA
-	model = model_from_yaml(yaml, custom_objects={'MeanOverTime': MeanOverTime, 'RWA':RWA})
-	'''
-	############################################
-	
-	model.compile(loss=loss, optimizer=optimizer, metrics=[kappa])
+	model.compile(loss=loss, optimizer=optimizer, metrics=metrics)
 	print(model.summary())
 	
 	###############################################################################################################################
@@ -240,6 +334,10 @@ def run(argv=None):
 	
 	##############################
 	''' Evaluate test_kappa '''
+	
+	from sklearn.metrics import roc_auc_score as auc, average_precision_score
+	def map(y_true, y_prob):
+		return average_precision_score(y_true, y_prob)
 	
 	class Eval(Callback):
 	    def __init__(self, x, y, funcs, prefix='test', batch_size=128):
@@ -251,7 +349,7 @@ def run(argv=None):
 	        self.batch_size = batch_size
 	        self.epoch = 0
 	        
-	    def on_epoch_end(self, batch, logs={}):
+	    def on_epoch_end(self, epoch, logs={}):
 	    	self.epoch+=1
 	    	p = np.asarray(self.model.predict(self.x, batch_size=self.batch_size).squeeze())
 	    	for func in self.funcs:
@@ -259,17 +357,70 @@ def run(argv=None):
 	    		name = '{}_{}'.format(self.prefix, func.__name__)
 	    		logs[name] = f
 	    		print(' - {0}: {1:0.4f}'.format(name,f))
-	    
-	eval = Eval(test_x, test_df['y'].values, [nkappa], 'test')
-	callbacks.append(eval)
+	    		#sys.stdout.write(' - {0}: {1:0.4f} '.format(name,f))
 	
+	eval = Eval(dev_x, dev_df['yint'].values, [map], 'val'); callbacks.append(eval)
+	monitor = 'val_map'
+	
+# 	eval = Eval(test_x, test_df['yint'].values, [qwk,auc], 'test'); callbacks.append(eval)
+	eval = Eval(test_x, test_df['yint'].values, [map,qwk], 'test'); callbacks.append(eval)
+# 	monitor = 'test_map'
+
 	##############################
 	''' ModelCheckpoint '''
 	
-	wt_path= os.path.join(out_dir, 'weights.{}.hdf5'.format('rwa'))
-	checkpt = ModelCheckpoint(wt_path, monitor='val_kappa', verbose=1, save_best_only=True, mode='max')
+	wt_path= os.path.join(out_dir, 'weights.{}.hdf5'.format(pid))
+	checkpt = ModelCheckpoint(wt_path, monitor=monitor, verbose=1, save_best_only=True, mode='max')
 	callbacks.append(checkpt)
 	
+	##############################
+	''' PR Curve '''
+	from sklearn.metrics import precision_recall_curve
+	import matplotlib.pyplot as plt
+	
+	class PR(object):
+	    def __init__(self, model, checkpoint, x, y, prefix='test', batch_size=128):
+	        self.model=model
+	        self.checkpoint=checkpoint
+	        self.x=x
+	        self.y=y
+	        self.prefix = prefix
+	        self.batch_size = batch_size
+	        
+	    def predict(self):
+	    	self.model.load_weights(self.checkpoint.filepath)
+	    	self.p = np.asarray(self.model.predict(self.x, batch_size=self.batch_size).squeeze())
+	        
+	    def pr_curve(self, y, p, s=''):
+	    	aps = average_precision_score(y, p)
+	    	precision, recall, _ = precision_recall_curve(y, p)
+	    	name = '{}_{}'.format(self.prefix, 'pr_curve')
+	    	plt.figure()
+	    	plt.step(recall, precision, color='b', alpha=0.2, where='post')
+	    	plt.fill_between(recall, precision, step='post', alpha=0.2, color='b')
+	    	plt.xlabel('Recall')
+	    	plt.ylabel('Precision')
+	    	plt.ylim([0.0, 1.05])
+	    	plt.xlim([0.0, 1.0])
+	    	plt.title('PR curve (mode={1}): {2}, AUC={0:0.4f}'.format(aps, pid, s))
+	    
+	    def run_sample(self, q, n=1000):
+	    	(y,p) = down_sample_bootstrap(self.y, self.p, q, n)
+	    	## draw curve
+	    	self.pr_curve(y, p, s='{0}% off-mode'.format(int(q*100)))
+	    	## make table
+	    	print('\nMode={2}, {0}% off-mode (#samples={1}):'.format(int(q*100), n, pid))
+	    	print tabulate(stats((y,p),n), headers="firstrow", floatfmt='.3f')
+	    	
+	    
+	    def run(self, Q=[0.1, 0.01]):
+	    	self.predict()
+	    	for q in Q:
+	    		self.run_sample(q)
+	    	return self.y,self.p
+		
+	pr = PR(model, checkpt, test_x, test_df['yint'].values, 'test')
+	    		
 	##############################
 	''' LRplateau '''
 	
@@ -313,42 +464,146 @@ def run(argv=None):
 	                        self.on_lr_reduce(epoch)
 	                self.wait += 1
 	
-	reduce_lr = LRplateau(monitor='val_kappa',
-						mode='max',
-						patience=3,
-						factor=0.33,
-						min_lr=0.00001,
-						verbose=1,
-						checkpoint=checkpt)
+	reduce_lr = LRplateau(	monitor=monitor,
+							mode='max',
+							patience=3,
+							factor=0.33,
+							min_lr=0.00001,
+							verbose=1,
+							checkpoint=checkpt)
 	
 	callbacks.append(reduce_lr)
 	
 
 	###############################################################################################################################
 	## Training
-
-	model.fit(train_x,train_y,
-			validation_data=(dev_x, dev_df['y'].values),
-			batch_size=args.batch_size, 
-			epochs=args.epochs,
-			callbacks=callbacks,
-			verbose=1)
+	if mode=='train':
+		model.fit(	train_x,train_y,
+					validation_data=(dev_x, dev_df['yint'].values),
+					batch_size=args.batch_size, 
+					epochs=args.epochs,
+					callbacks=callbacks,
+					verbose=1)
+	
+	## Evaluate ###############################################
+	y,p = pr.run(Q=[0.2,0.1,0.05])
+	return y,p
+	
 	
 	###############################################################################################################################
+
+def make_dataset(	mode, ids,
+					data_dir='/home/david/data/ets1b/2016',
+					out_dir = '/home/david/data/ets1b/2016/off_mode',
+# 					out_dir = '/home/david/data/ets1b/2016/temp',
+					vocab_file='vocab_n250.txt',
+					Nnum = 2000,
+					Nmode = 1000,
+					train_test_split = 0.8,
+					train_test_overlap=True
+				):
 	
+	out_dir = os.path.join(out_dir, mode)
+	vocab_file = os.path.join(data_dir, vocab_file)
+	essay_files = []
+
+	for id in ids:
+	    idstr = '{}'.format(id)
+	    essay_file = os.path.join(data_dir, idstr, idstr + '.txt.clean.tok')
+	    essay_files.append(essay_file)
+	
+	word_vocab, char_vocab, max_word_length = load_vocab(vocab_file)
+	num_reader = EssaySetReader(essay_files, word_vocab, char_vocab, chunk_size=4000, regex=REGEX_NUM)
+	mode_reader = EssaySetReader(essay_files, word_vocab, char_vocab, chunk_size=5000, regex=REGEX_MODE)
+
+	text = []
+	train_ids = []
+	test_ids = []
+	
+	def add_samples(reader, label, N):
+		n = 0
+		for r in reader.record_stream(stop=True):
+			n += 1
+			if n>N:
+				break
+			id = r[0]
+			txt = r[2]
+			text.append('{}\t{}\t{}'.format(id, label, txt))
+			if np.random.rand() < train_test_split:
+				train_ids.append(id)
+			else:
+				test_ids.append(id)
+		return n
+	
+	nm = add_samples(mode_reader, 1, Nmode)
+	if nm<Nmode:
+		Nnum = Nnum*nm/Nmode
+	add_samples(num_reader, 0, Nnum)
+	print('n={}'.format(len(text)))
+	
+	random.shuffle(text)
+	train_ids.sort()
+	test_ids.sort()
+	
+	def write_to_file(lines, dir, name):
+		with open(os.path.join(dir,name), 'w') as f:
+			for line in lines:
+				f.write(str(line) + '\n')
+	
+	write_to_file(text, out_dir, 'text.txt')
+	write_to_file(train_ids, out_dir, 'train_ids.txt')
+	write_to_file(test_ids, out_dir, 'test_ids.txt')
+
 if __name__ == "__main__":
+	make_data = False
 	
-	prompt = '55433';
-	# 57452 54147 61693 61915 70086* 61875 
-	# 55433 61247 61352* 54735 61923* 
-	# 55052* 62037 61891*
+	# 	MAP
+# 	prompt = 'arg'# 0.925(1/4) [100x300] pool=2
+# 	prompt = 'exp'# 
+# 	prompt = 'inf'# 
+# 	prompt = 'nar'# 
+	prompt = 'opi'# 0.95 (1/4) [100x100] pool=3(2)
+
+# 	make_data = True
 	
-	# 55417* : RANDSEED=9830 300x300 test-qwk= 0.8065 (0.7818) VS TEST KAPPAS (float, int)= 0.8094 (0.7753)
-	# 55403* : RANDSEED=8636 300x300 optimizer = optimizers.RMSprop(lr=0.001, rho=0.9, epsilon=1e-6, clipnorm=10)
-	# 61891* : 50x100
-	#################
+	run_mode = 'train'
+# 	run_mode = 'test'
+
+	######################################################
 	
-	dataroot = '/home/david/data/ats/ets'
+	if make_data and run_mode=='train':
+		if prompt == 'arg':
+			make_dataset('arg',
+						[54145, 55050, 55401, 55413, 56342, 56523, 57244, 57456, 61088, 61697, 61703, 61711, 61861, 67556],
+						vocab_file='vocab_n250.txt', Nnum = 4000, Nmode = 1000
+						)
+		if prompt == 'exp':
+			make_dataset('exp',
+						[54135,54151,54741,55064,55074,55373,55405,55419,57517,61659,61665,
+						61673,61681,61719,61897,61913,61921,61929,61985,61993,70088],
+						vocab_file='vocab_n250.txt', Nnum = 8000, Nmode = 2000
+						)
+		if prompt == 'inf':
+			make_dataset('inf',
+						[54183, 54703, 55381, 55427, 55435, 56356, 56525, 57186, 57236, 57440, 57472, 57513, 61332, 61342, 62003],
+						vocab_file='vocab_n250.txt', Nnum = 4000, Nmode = 1000
+						)
+		if prompt == 'nar':
+			make_dataset('nar',
+						[54191,54209,54697,55385,55393,55415,55425,55431,56354,56379,56529,57392,57398,
+						57446,57482,61334,61452,61689,61727,61835,61843,61881,61937,62033,62047,62051],
+						vocab_file='vocab_n250.txt', Nnum = 4000, Nmode = 1000
+						)
+		if prompt == 'opi':
+			make_dataset('opi',
+		 				[54201,55387,56365,57190,57478,61426,61442,61851,62059],
+		 				vocab_file='vocab_n250.txt', Nnum = 4000, Nmode = 1000
+		 				)
+ 	
+# 	sys.exit()
+	######################################################
+	
+	dataroot = '/home/david/data/ets1b/2016/off_mode'
 	datapath = os.path.join(dataroot, prompt)
 	
 	deepatsroot = '/home/david/code/python/DeepATS'
@@ -358,30 +613,22 @@ if __name__ == "__main__":
 	argv = args.split()
 	
 	argv.append('--prompt'); argv.append(prompt)
+	argv.append('--mode'); argv.append(run_mode)
 	
-	#argv.append('--batch-size'); argv.append('32')
+# 	argv.append('--batch-size'); argv.append('32')
 	argv.append('--batch-size'); argv.append('64')
-	#argv.append('--batch-size'); argv.append('128')
+# 	argv.append('--batch-size'); argv.append('128')
 	
+	argv.append('--loss'); argv.append('mse')
+# 	argv.append('--loss'); argv.append('kappa')
 	
-	argv.append('--loss'); argv.append('kappa')
-	#argv.append('--loss'); argv.append('soft_kappa')
-	#argv.append('--loss'); argv.append('mse')
+# 	argv.append('--rec-unit'); argv.append('rwa')
+# 	argv.append('--stack'); argv.append('2')
 	
-	#argv.append('--emb'); argv.append('/home/david/data/embed/glove.6B.50d.txt')
-	#argv.append('--emb'); argv.append('/home/david/data/embed/glove.6B.100d.txt'); argv.append('--embdim'); argv.append('100');
-	argv.append('--emb'); argv.append('/home/david/data/embed/glove.6B.200d.txt'); argv.append('--embdim'); argv.append('200');
-	#argv.append('--emb'); argv.append('/home/david/data/embed/glove.6B.300d.txt'); argv.append('--embdim'); argv.append('300');
-	
-	#argv.append('--emb'); argv.append('/home/david/data/embed/lexvec.commoncrawl.300d.W.pos.neg3.txt'); argv.append('--embdim'); argv.append('300');
-	
-	#argv.append('--emb'); argv.append('/home/david/data/embed/fasttext.sg.100d.txt'); argv.append('--embdim'); argv.append('100');##BEST
-	#argv.append('--emb'); argv.append('/home/david/data/embed/fasttext.sg.200d.m1.txt'); argv.append('--embdim'); argv.append('200');
-	#argv.append('--emb'); argv.append('/home/david/data/embed/fasttext.sg.200d.m2.txt'); argv.append('--embdim'); argv.append('200');
-	#argv.append('--emb'); argv.append('/home/david/data/embed/fasttext.cb.200d.m2.txt'); argv.append('--embdim'); argv.append('200');
-	#argv.append('--emb'); argv.append('/home/david/data/embed/fasttext.6033.200d.txt'); argv.append('--embdim'); argv.append('200');
-	
-	#argv.append('--emb'); argv.append('/home/david/data/embed/sswe.w5.100d.txt'); argv.append('--embdim'); argv.append('100');
+# 	argv.append('--emb'); argv.append('/home/david/data/embed/glove.6B.50d.txt'); argv.append('--embdim'); argv.append('50');
+	argv.append('--emb'); argv.append('/home/david/data/embed/glove.6B.100d.txt'); argv.append('--embdim'); argv.append('100');
+# 	argv.append('--emb'); argv.append('/home/david/data/embed/glove.6B.200d.txt'); argv.append('--embdim'); argv.append('200');
+# 	argv.append('--emb'); argv.append('/home/david/data/embed/glove.6B.300d.txt'); argv.append('--embdim'); argv.append('300');
 	
 	#argv.append('--vocab-size'); argv.append('2560')
 	#argv.append('--cnndim'); argv.append('64')
@@ -389,10 +636,7 @@ if __name__ == "__main__":
 	#argv.append('--rnndim'); argv.append('167')
 	#argv.append('--rnndim'); argv.append('200')
 	#argv.append('--rnndim'); argv.append('250')
-	argv.append('--rnndim'); argv.append('100')
-	
-	argv.append('--rec-unit'); argv.append('rwa')
-	#argv.append('--stack'); argv.append('2')
+	argv.append('--rnndim'); argv.append('300')
 		
 	#argv.append('--dropout'); argv.append('0.46')
 	argv.append('--dropout'); argv.append('0.5')
@@ -405,8 +649,7 @@ if __name__ == "__main__":
 	#argv.append('--algorithm'); argv.append('sgd')
 	#argv.append('--algorithm'); argv.append('adagrad')
 	
-	argv.append('--seed'); argv.append('0')
-	argv.append('--seed'); argv.append('5916')
+# 	argv.append('--seed'); argv.append('1831')
 	
 	#argv.append('--skip-emb-preload')
 	#argv.append('--tokenize-old')
@@ -417,7 +660,7 @@ if __name__ == "__main__":
 	argv.append('--abs-out'); argv.append(outroot)
 	argv.append('--data-path'); argv.append(datapath)
 	
-	argv.append('--epochs'); argv.append('50')
+	argv.append('--epochs'); argv.append('100')
 	
-	run(argv)
+	y,p = run(argv)
 

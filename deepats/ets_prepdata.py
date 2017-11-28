@@ -7,7 +7,6 @@ import re
 from shutil import copyfile
 #from numpy.ma.core import ids
 
-
 '''
 sudo mount -t cifs -o username=dvaughn //spshare.miat.co/Users /media/david/spshare
 '''

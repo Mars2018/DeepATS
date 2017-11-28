@@ -9,8 +9,9 @@ import codecs
 import nltk
 import logging
 import pickle as pk
-#from sklearn.cross_validation import train_test_split
-from sklearn.model_selection import train_test_split
+
+from sklearn.cross_validation import train_test_split
+#from sklearn.model_selection import train_test_split
 
 from my_kappa_calculator import quadratic_weighted_kappa as qwk
 
@@ -229,6 +230,70 @@ def get_data(data_path,
 	overal_maxlen = max(train_maxlen, dev_maxlen, test_maxlen)
 	
 	return train_df, dev_df, test_df, vocab, overal_maxlen, (k1,k2)
+
+def get_mode_data(	data_path, 
+					dev_split=0.2, 
+					tokenize_text=True, 
+					to_lower=True, 
+					vocab_path=None, 
+					min_word_freq=2, 
+					emb_words=None,
+					seed=1234
+					):
+	
+	train_id_file = os.path.join(data_path, 'train_ids.txt')
+	test_id_file = os.path.join(data_path, 'test_ids.txt')
+	text_file = os.path.join(data_path, 'text.txt')
+	
+	df = pd.read_csv(text_file, sep="\t", header = None, encoding='utf-8').sort_values(by=0)
+	df.columns = ['id','yint','text']
+	train_ids = np.genfromtxt(train_id_file, dtype=np.int32)
+	
+	df_test = pd.read_csv(test_id_file, sep="\t", header = None).sort_values(by=0)
+	test_ids = df_test[0].values.astype('int32')
+	
+	df2 = df.loc[df['id'].isin(test_ids)]
+	t_test = df2['yint'].values.astype('float32')
+	
+	# stratified train/dev split
+	df2 = df.loc[df['id'].isin(train_ids)]
+	y = df2.pop('yint')
+	X_train, X_dev, y_train, y_dev = train_test_split( df2, y, stratify=y, test_size=dev_split, random_state=seed)
+	
+	train_ids = X_train['id'].values
+	dev_ids = X_dev['id'].values
+	train_ids.sort(); dev_ids.sort(); test_ids.sort()
+	
+	train_df = df.loc[df['id'].isin(train_ids)]
+	dev_df = df.loc[df['id'].isin(dev_ids)]
+	test_df = df.loc[df['id'].isin(test_ids)]
+	
+	ymin = 0
+	ymax = 1
+	
+	train_df.ymin = ymin; train_df.ymax = ymax
+	dev_df.ymin = ymin; dev_df.ymax = ymax
+	test_df.ymin = ymin; test_df.ymax = ymax
+	
+	if vocab_path:
+		with open(vocab_path, 'rb') as vocab_file:
+			vocab = pk.load(vocab_file)
+	else:
+		vocab = create_vocab(train_df['text'].values, tokenize_text, to_lower, min_word_freq, emb_words)	
+	vocab_size = len(vocab)
+	logger.info('  Vocab size: %i' % (vocab_size))
+	
+	pd.options.mode.chained_assignment = None
+	train_df.loc[:,'text'] = tokenize_dataset(train_df['text'].values, vocab, tokenize_text, to_lower)
+	dev_df.loc[:,'text'] = tokenize_dataset(dev_df['text'].values, vocab, tokenize_text, to_lower)
+	test_df.loc[:,'text'] = tokenize_dataset(test_df['text'].values, vocab, tokenize_text, to_lower)
+	
+	train_maxlen = train_df['text'].map(len).max()
+	dev_maxlen = dev_df['text'].map(len).max()
+	test_maxlen = test_df['text'].map(len).max()
+	overal_maxlen = max(train_maxlen, dev_maxlen, test_maxlen)
+	
+	return train_df, dev_df, test_df, vocab, overal_maxlen
 
 if __name__ == '__main__':
 	from w2vEmbReader import W2VEmbReader as EmbReader

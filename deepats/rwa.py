@@ -206,6 +206,7 @@ class RWA(Recurrent):
         initial_state = K.expand_dims(initial_state)  # (samples, 1)
         initial_state = K.tile(initial_state, [1, self.units])
         dtype = initial_state.dtype
+        dtype = 'float32'
         min_value = np.asscalar(np.array([1E38]).astype(dtype))
         initial_state = initial_state - min_value
         initial_states.append(initial_state)
